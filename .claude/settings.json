@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(../.venv/Scripts/python -c ' *)",
+      "Bash(../.venv/Scripts/python -m pytest tests/test_reward.py -v)",
+      "Bash(../.venv/Scripts/python -m pip install -q tqdm rich)",
+      "Bash(../.venv/Scripts/python train_ppo.py --n-envs 4 --total-timesteps 4096 --n-steps 256 --batch-size 256)",
+      "Bash(./.venv/Scripts/python -m pip install -q tensorboard)",
+      "Bash(../.venv/Scripts/python train_ppo.py --n-envs 8 --total-timesteps 8192 --n-steps 256 --batch-size 256)",
+      "Bash(.venv/Scripts/python -c ' *)",
+      "Bash(../.venv/Scripts/python -m pytest tests/ -q)",
+      "Bash(ls geometry/*.py)",
+      "Bash(ls *.py)",
+      "Bash(ls tools *)",
+      "Bash(ls scripts *)",
+      "Bash(../.venv/Scripts/python evaluate.py)",
+      "Bash(../.venv/Scripts/python train_ppo.py --n-envs 2 --total-timesteps 6000 --n-steps 256 --batch-size 128)",
+      "Bash(../.venv/Scripts/python train_ppo.py --n-envs 2 --total-timesteps 6000 --n-steps 256 --batch-size 128 --outputs-dir \"C:/Users/leesh/AppData/Local/Temp/claude/c--Users-leesh-Intra-Imprv/7bfb75c8-0189-4b50-91ed-4348b50ec36e/scratchpad/smoke_outputs\")"
+    ]
+  }
+}

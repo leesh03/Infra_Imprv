@@ -1,0 +1,109 @@
+paths:
+  road_dxf: "../data/raw/cad/road_model.dxf"
+  bus_dxf: "../data/raw/cad/bus_model.dxf"
+  geometry_dir: "geometry"
+  outputs_dir: "outputs"
+
+dxf:
+  insunits_mm: 4          # $INSUNITS expected value (mm)
+  scale_to_m: 0.001        # mm -> m
+  flatten_tol_m: 0.02      # SPLINE/ARC flattening tolerance
+  plan_layers: ["Sketch4", "Sketch3"]   # 평면 경계 (suffix 매칭, 한글 prefix 무시)
+  slope_layers:
+    upper: "윗 경로"
+    lower: "아랫 경로"
+
+bus:
+  length_total: 11.780   # 전장 [m]  (DXF, bus_model.dxf 기준)
+  width: 2.495           # 전폭 [m]  (DXF)
+  wheelbase_L: 6.290      # 축거 [m]  (DXF, Bicycle 모델의 L)
+  overhang_front: 2.772   # 전방 오버행 [m] (DXF)
+  overhang_rear: 2.718    # 후방 오버행 [m] (DXF)
+  R_min: 10.5             # 최소회전반경 [m]  (vehicle_spec.csv 실측치)
+  # 파생: delta_max = arctan(wheelbase_L / R_min) = arctan(6.290 / 10.5)
+
+  # 기준점 (§2.6) — 코드에 상수로
+  rear_axle_local_Y: 9.0623          # 버스 로컬 뒷축 Y [m]
+  ref_point_local: [1.2475, 0.0, 0.625]  # 앞면 하단 중심 (목표 판정 기준)
+  d_ref: 9.0623                       # 뒷축 -> 앞면중심 (heading 방향) [m]
+
+kinematics:
+  # 주의: 이 값은 "기동(회차) 허용 속도"지, 버스 카탈로그 최고속도가 아니다.
+  v_max: 2.0    # 전진 최대속도 [m/s]
+  v_min: -2.0   # 후진 최대속도 [m/s]
+  a_max: 1.0    # 최대 가감속 [m/s^2]
+  dt: 0.1       # 시뮬 타임스텝 [s]
+  steer_rate_max: 0.5   # 조향각속도 한계 [rad/s] (action[1]=+-1 -> +-steer_rate_max)
+
+goal:
+  ref: front_face_bottom_center   # 고정 (변경 금지)
+  # 상단(진출) 경사로 끝 지점 — 도로 끝과 버스 앞면 중앙이 닿는 자세 (사용자 확인).
+  # 경계선과 완전히 겹치면 shapely contains()가 경계접촉을 충돌로 보는 문제가
+  # 있어 1m 안쪽으로 여유를 둠 (도로 끝 중점은 (-50.7601, 5.0)).
+  x: -49.7601
+  y: 5.0
+  heading: 3.1416   # rad (pi), apex(turn zone) 반대 방향, 도로 끝을 향해 진행
+  tol_pos: 0.5
+  tol_heading: 0.1
+  v_stop: 0.1
+
+# 시작 자세 (뒷축 기준, road 좌표). 하단(진입) 경사로 끝 지점 — 도로 끝과
+# 버스 뒷면이 닿는 자세, 진입 경사로 방향(apex 쪽)으로 헤딩 (사용자 확인:
+# 하단=진입, 상단=진출).
+start:
+  # 1m + rear_oh(2.718m) 안쪽 여유 적용 (도로 끝 중점은 (-47.8683, -28.7952))
+  x: -44.5503
+  y: -27.1177
+  heading: 0.4681   # rad (약 26.82deg), 진입 경사로 진행방향(apex를 향함)
+
+sensors:
+  # 도로 전체가 진입/진출 경사로(각 50~56m)까지 확장되면서 직선 구간에서
+  # 더 멀리/더 촘촘히 내다볼 필요가 있어 12->16개, 15m->20m로 확장.
+  n_rays: 16        # 360도 균등 분포, 뒷축 기준
+  max_range: 20.0   # [m]
+  lookahead_d: 2.0  # 전방 경사 lookahead 거리 [m] (grade_ahead)
+
+# 시작 자세 커리큘럼/노이즈 (TASK 9 선반영). level_default=1.0은 기존과
+# 동일하게 config의 start에서 시작(노이즈 0이면 완전히 동일). 학습 스크립트가
+# set_curriculum_level()/noise_*_std를 점진적으로 올려 쉬운 자세(GOAL 근처)
+# 부터 시작해 점점 어렵게(START까지) 만드는 커리큘럼에 사용.
+curriculum:
+  # level_default는 난이도 "하한"이다. 매 에피소드 [level, 1.0] 구간에서
+  # 무작위로 난이도를 뽑는다(0=GOAL 근처도 허용 ~ 1=항상 실제 START) — 고정
+  # 난이도로만 학습하면 학습 후반 START로 고정되는 순간 정책이 못 본 분포를
+  # 만나 행동이 무너지는 문제가 있어(1차 학습에서 성공률 100%->0% 붕괴 후
+  # 회복 못함) 매 에피소드 난이도를 섞는 방식으로 변경.
+  level_default: 1.0
+  noise_pos_std: 0.0       # 시작 위치 가우시안 노이즈 표준편차 [m]
+  noise_heading_std: 0.0   # 시작 헤딩 가우시안 노이즈 표준편차 [rad]
+
+env:
+  # 경사로 포함 전체 경로 길이가 약 150m+(진입 55.7m + 회차 구간 + 진출
+  # 50.8m)로 늘어나, v_max=2.0m/s 기준 600 steps(60초, 최대 120m)로는 도달이
+  # 물리적으로 불가능해 1800 steps(180초)로 확장 (도로 확장 작업 중 발견).
+  max_episode_steps: 1800
+
+slope:
+  use_dynamics_term: false
+  g: 9.81
+  blend_half_width_m: 1.0   # 정점 전환 구간 블렌드 폭 [m] (두 갈래 중심선 거리차 기준)
+
+verification:
+  upper_grade_pct: 1.97
+  lower_grade_pct: 8.24
+  grade_tol_pct: 0.1
+  wheelbase_tol_m: 0.13   # ±2% of 6.290
+
+# 보상 가중치 (TASK 7 — §RL_BUILD_INSTRUCTIONS.md 표와 동일 항목)
+reward:
+  w_pose: 1.0              # 목표 자세 shaping
+  goal_bonus: 100.0         # 목표 도달 보너스
+  clearance_threshold: 1.0  # 경계 여유 임계 [m]
+  w_clear: 5.0              # 경계 여유 페널티 가중치
+  w_steer_smooth: 0.1       # 급조향 페널티 가중치 (|Δδ|)
+  w_reversal: 2.0           # 방향전환 기본 페널티
+  reversal_slope_k: 5.0     # 방향전환 페널티의 경사 비례 계수 k
+  w_stop_slope: 1.0         # 정지체류 페널티 가중치 (경사 비례)
+  stop_speed_thresh: 0.2    # 정지체류로 간주하는 속도 [m/s]
+  collision_penalty: 100.0  # 충돌/경계침범 페널티
+  time_penalty: 0.01        # 스텝당 시간 페널티

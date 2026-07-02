@@ -1,0 +1,12 @@
+layouts: Layout1,Layout2,Model
+blocks: 
+('3DSOLID', '0') 1
+('LINE', '운행 구간 new v6_Sketch3') 2
+('LINE', '운행 구간 new v6_Sketch4') 6
+('LINE', '운행 구간 new v6_아랫 경로') 3
+('LINE', '운행 구간 new v6_윗 경로') 3
+('POINT', '운행 구간 new v6_Sketch3') 1
+('POINT', '운행 구간 new v6_Sketch4') 1
+('POINT', '운행 구간 new v6_아랫 경로') 1
+('POINT', '운행 구간 new v6_윗 경로') 1
+('SPLINE', '운행 구간 new v6_Sketch4') 3
