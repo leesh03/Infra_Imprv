@@ -41,22 +41,18 @@ class GradeField:
     @classmethod
     def from_files(cls, geometry_dir=None, blend_half_width_m=None):
         geometry_dir = Path(geometry_dir) if geometry_dir else (SIM_DIR / "geometry")
+        with open(SIM_DIR / "config.yaml", "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
         if blend_half_width_m is None:
-            with open(SIM_DIR / "config.yaml", "r", encoding="utf-8") as f:
-                blend_half_width_m = yaml.safe_load(f)["slope"]["blend_half_width_m"]
-        with open(geometry_dir / "raw_plan.json", "r", encoding="utf-8") as f:
-            raw = json.load(f)
+            blend_half_width_m = cfg["slope"]["blend_half_width_m"]
         with open(geometry_dir / "grades.json", "r", encoding="utf-8") as f:
             grades = json.load(f)
 
-        ref_lines = [seg for seg in raw["segments"] if seg["layer"].endswith("Sketch3")]
-        if len(ref_lines) != 2:
-            raise ValueError(f"Sketch3 정점 기준선이 2개여야 함 (found {len(ref_lines)})")
-
-        segs = [(tuple(seg["points"][0]), tuple(seg["points"][-1])) for seg in ref_lines]
-        # 윗 갈래 기준선은 +Y에 가깝다(끝점 y가 더 큼), 아랫 갈래는 -Y에 가깝다
-        segs.sort(key=lambda s: s[1][1], reverse=True)
-        upper_seg, lower_seg = segs[0], segs[1]
+        # v3 dxf에는 Sketch3(갈래 판정 기준선)가 없어 config.yaml의 apex 기준
+        # 고정 방향 벡터(slope.grade_refs)를 사용한다 (§geometry/build_boundary.py 참조).
+        refs = cfg["slope"]["grade_refs"]
+        upper_seg = (tuple(refs["upper"][0]), tuple(refs["upper"][1]))
+        lower_seg = (tuple(refs["lower"][0]), tuple(refs["lower"][1]))
 
         return cls(
             upper_seg=upper_seg,

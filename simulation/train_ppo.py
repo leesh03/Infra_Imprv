@@ -94,6 +94,14 @@ class CurriculumCallback(BaseCallback):
 
 
 def main():
+    # 2026-07-06: 8논리코어 머신에서 SubprocVecEnv n_envs=8을 그대로 쓰면
+    # 메인 프로세스의 PyTorch가 기본적으로 코어 수만큼 스레드를 잡아먹어
+    # 8개 env 워커 프로세스와 CPU를 두고 경합한다(관측된 실제 fps가 8배
+    # 병렬화 기대치에 한참 못 미쳤음 — 단일 프로세스 fps와 거의 같았음).
+    # 메인 프로세스의 torch 스레드를 1로 제한해 env 워커에 코어를 양보한다.
+    import torch
+    torch.set_num_threads(1)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--n-envs", type=int, default=8)
     parser.add_argument("--total-timesteps", type=int, default=5_000_000)

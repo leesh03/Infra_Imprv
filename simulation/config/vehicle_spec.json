@@ -1,0 +1,31 @@
+{
+  "_comment": "단일 제원 진실 소스 스냅샷 (RL_WHEEL_GEOMETRY_REPLAN.md PHASE 0). RL 학습(config.yaml)과 향후 Vehicle Tracking 외부 검증(PHASE 5)이 같은 차량을 참조하도록 확정한 값. R_min/T_f는 자기인증 제원표 확보 전까지 추정값이며 label 필드로 명시한다.",
+  "vehicle": "현대 유니버스 엘레강스",
+  "source_of_truth": "RL_PROGRESS_REPORT.md",
+  "length_total_m": 11.780,
+  "width_m": 2.495,
+  "wheelbase_L_m": 6.290,
+  "overhang_front_m": 2.772,
+  "overhang_rear_m": 2.718,
+  "d_ref_m": 9.0623,
+  "rear_axle_local_Y_m": 9.0623,
+  "ref_point_local_m": [1.2475, 0.0, 0.625],
+  "R_min_m": 10.5,
+  "R_min_basis": "outer_front_tire_track",
+  "R_min_label": "estimated",
+  "R_min_acquisition_priority": [
+    "자동차등록증/자기인증 제원표 (법정 최소회전반경 기재)",
+    "현대차 상용 고객센터 (차대번호/트림 제시 후 제원표 요청)",
+    "미확보 시 PHASE 1 환산식으로 delta_max 유도, 추정값으로 라벨링 (현재 상태)"
+  ],
+  "T_f_m": 2.075,
+  "T_f_label": "estimated",
+  "T_f_note": "현대 유니버스 카탈로그 참고값 (앞 2075mm/뒤 1850mm), 트림 확정 전",
+  "deprecated_vehicle_tracking_template": {
+    "_comment": "폐기 대상 — 노블(HD급) 계열 오입력으로 판단됨. RL 보고서 값으로 대체.",
+    "length_total_m": 13.01,
+    "overhang_front_m": 2.60,
+    "overhang_rear_m": 4.12,
+    "R_min_m": 10.5
+  }
+}

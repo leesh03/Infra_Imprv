@@ -10,7 +10,7 @@ from gymnasium import spaces
 from shapely.geometry import LineString, Point, Polygon
 
 from envs.reference_path import ReferencePath
-from envs.sensors import cast_rays
+from envs.sensors import build_sensor_lines, cast_rays
 from geometry.grade_field import GradeField
 from kinematics.bicycle import BicycleModel, BicycleState
 
@@ -41,6 +41,12 @@ class BusHairpinEnv(gym.Env):
             obstacles = json.load(f)["obstacles"]
         self.obstacle_polygons = [Polygon(o) for o in obstacles]
         self.obstacle_lines = [LineString(p.exterior.coords) for p in self.obstacle_polygons]
+        # boundary_line이 16,391개 정점짜리라 매 ray를 통짜로 intersection하면
+        # 너무 느려(PPO fps 51 -> 5M step에 27시간) ray-casting 전용 단순화
+        # 사본을 한 번만 만들어 쓴다(충돌판정용 원본 polygon은 그대로 둠).
+        self.sensor_boundary_line, self.sensor_obstacle_lines = build_sensor_lines(
+            self.boundary_line, self.obstacle_lines
+        )
 
         self.grade_field = GradeField.from_files(geometry_dir=geometry_dir)
         self.reference_path = ReferencePath.from_file(geometry_dir / "reference_path.json")
@@ -70,6 +76,8 @@ class BusHairpinEnv(gym.Env):
 
         self.rcfg = config["reward"]
         self.max_episode_steps = config["env"]["max_episode_steps"]
+        # RL_WHEEL_GEOMETRY_REPLAN.md PHASE 2: 스텝 사이 보간 서브스텝 수
+        self.collision_substeps = config["env"].get("collision_substeps", 1)
 
         self.a_max = config["kinematics"]["a_max"]
         self.steer_rate_max = config["kinematics"]["steer_rate_max"]
@@ -118,12 +126,28 @@ class BusHairpinEnv(gym.Env):
         ]
         return Polygon(world_corners)
 
-    def _check_collision(self, state: BicycleState):
+    def _collision_at(self, state: BicycleState):
         bus_poly = self._bus_polygon(state)
         if not self.boundary_polygon.contains(bus_poly):
             return True
         for obs in self.obstacle_polygons:
             if bus_poly.intersects(obs):
+                return True
+        return False
+
+    def _check_collision(self, state: BicycleState, prev_state: BicycleState = None):
+        """RL_WHEEL_GEOMETRY_REPLAN.md PHASE 2: prev_state가 주어지면 그 사이를
+        collision_substeps회 선형보간해 중간 자세도 검사한다(스텝당 이동량이
+        커도 벽을 통과해 지나치는 걸 놓치지 않기 위함). prev_state가 없으면
+        (예: 시작 자세 샘플링) 단일 자세만 검사."""
+        if prev_state is None or self.collision_substeps <= 1:
+            return self._collision_at(state)
+        for k in range(1, self.collision_substeps + 1):
+            t = k / self.collision_substeps
+            ix = prev_state.x + (state.x - prev_state.x) * t
+            iy = prev_state.y + (state.y - prev_state.y) * t
+            ith = prev_state.theta + _wrap_angle(state.theta - prev_state.theta) * t
+            if self._collision_at(BicycleState(x=ix, y=iy, theta=ith)):
                 return True
         return False
 
@@ -156,7 +180,7 @@ class BusHairpinEnv(gym.Env):
 
         rays = cast_rays(
             state.x, state.y, state.theta, self.n_rays, self.sensor_range,
-            self.boundary_line, self.obstacle_lines,
+            self.sensor_boundary_line, self.sensor_obstacle_lines,
         )
         grade = self.grade_field.grade_at(state.x, state.y)
         grade_ahead = self.grade_field.grade_ahead(state.x, state.y, state.theta, self.lookahead_d)
@@ -173,11 +197,22 @@ class BusHairpinEnv(gym.Env):
         return obs
 
     def _clearance(self, state: BicycleState):
-        rays = cast_rays(
-            state.x, state.y, state.theta, self.n_rays, self.sensor_range,
-            self.boundary_line, self.obstacle_lines,
-        )
-        return min(rays)
+        """RL_WHEEL_GEOMETRY_REPLAN.md PHASE 2/3: 뒷축 한 점이 아니라 차체
+        4모서리 + 앞면중심에서 각각 ray를 쏴 최솟값을 취한다 — 완전한
+        Minkowski 스윕 밴드 거리는 아니지만(그런 계산은 스텝마다 하기엔
+        비싸다), 단일점 대비 오버행 자락의 여유 부족을 반영하는 실질적
+        근사다. clear_term이 참조하는 clearance의 정의가 여기서 달라진다."""
+        fc_x, fc_y = self.front_center(state)
+        bus_poly = self._bus_polygon(state)
+        origins = [(state.x, state.y), (fc_x, fc_y), *list(bus_poly.exterior.coords)[:-1]]
+        min_clear = math.inf
+        for ox, oy in origins:
+            rays = cast_rays(
+                ox, oy, state.theta, self.n_rays, self.sensor_range,
+                self.sensor_boundary_line, self.sensor_obstacle_lines,
+            )
+            min_clear = min(min_clear, min(rays))
+        return min_clear
 
     # ------------------------------------------------------------------ #
     def _sample_start_pose(self):
@@ -246,7 +281,7 @@ class BusHairpinEnv(gym.Env):
         info = {}
         terminated = False
 
-        collided = self._check_collision(state)
+        collided = self._check_collision(state, prev_state)
         if collided:
             return -r["collision_penalty"], True, {"collision": True}
 
@@ -272,8 +307,9 @@ class BusHairpinEnv(gym.Env):
 
         clearance = self._clearance(state)
         clear_term = 0.0
-        if clearance < r["clearance_threshold"]:
-            clear_term = -r["w_clear"] * (r["clearance_threshold"] - clearance)
+        effective_threshold = r["clearance_threshold"] + r.get("boundary_margin_m", 0.0)
+        if clearance < effective_threshold:
+            clear_term = -r["w_clear"] * (effective_threshold - clearance)
 
         steer_term = -r["w_steer_smooth"] * abs(state.delta - prev_state.delta)
 

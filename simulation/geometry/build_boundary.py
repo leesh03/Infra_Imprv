@@ -13,8 +13,8 @@ from geometry.polygon_merge import chain_segments
 
 SIM_DIR = Path(__file__).resolve().parent.parent
 
-# Sketch4만 경계 소스로 사용 (Sketch3는 참고/원점 검증용 — §2.1)
-BOUNDARY_LAYER_SUFFIX = "Sketch4"
+# v3 dxf: 단일 통합 도면 레이어만 경계 소스로 사용 (Sketch3/Sketch4 구분 없음)
+BOUNDARY_LAYER_SUFFIX = "밑 도면"
 
 
 def main():

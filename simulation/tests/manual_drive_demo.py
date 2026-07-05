@@ -16,16 +16,36 @@ import numpy as np
 
 from envs.bus_hairpin_env import BusHairpinEnv, _wrap_angle
 
-# 도로 전체(진입 경사로 + 기존 회차 구간 + 진출 경사로)로 확장된 경유점.
-# 진입/진출 경사로 경유점은 각 램프 중심선(원점-edge 중점 ~ 램프 끝) 위에서
-# 샘플링해 경계와 충분한 여유를 둠. 진입/진출 경사로는 apex(0,0) 부근에서
-# 회차 구간(Sketch4)에 합류한다.
-NAV_PATH = [
-    (-35.44, -22.51), (-20.52, -14.97), (-5.61, -7.43),   # 진입 경사로
-    (2, -5), (10, -3), (20, -5),                           # 진입 경사로->회차 연결부
-    (28, -10), (22, -6), (15, -2), (8, 0),                 # 기존 회차 구간
-    (0, 3), (-7.61, 5.0), (-25.38, 5.0), (-43.15, 5.0),    # 회차구간->진출 경사로
-]
+# v3 dxf 재작업(2026-07-02): geometry/reference_path.json 중심선 경유점을
+# 사용 (첫 점=start는 env.reset() 시작 자세와 같으므로 제외). nav_action은
+# front_center 기준으로 목표까지 방향(alpha)을 계산하므로, 다음 목표가
+# d_ref(전방 오버행, 9.06m)보다 가까우면 "목표가 이미 뒤에 있다"고 오판해
+# 출발하자마자 후진해버린다 — 그래서 촘촘한 원 경로점 중 연속점 간 최소
+# MIN_SPACING_M 이상 떨어진 점만 남겨 성긴 NAV 경유점을 만든다.
+MIN_SPACING_M = 6.0
+
+
+def _load_nav_path():
+    import json
+    import math
+    from pathlib import Path
+
+    geometry_dir = Path(__file__).resolve().parent.parent / "geometry"
+    with open(geometry_dir / "reference_path.json", "r", encoding="utf-8") as f:
+        waypoints = [tuple(p) for p in json.load(f)["waypoints"]]
+
+    thinned = []
+    last = waypoints[0]  # start pose, not itself a nav target
+    for p in waypoints[1:]:
+        if math.hypot(p[0] - last[0], p[1] - last[1]) >= MIN_SPACING_M:
+            thinned.append(p)
+            last = p
+    if not thinned or thinned[-1] != waypoints[-1]:
+        thinned.append(waypoints[-1])
+    return thinned
+
+
+NAV_PATH = _load_nav_path()
 NAV_CAPTURE_R = 3.0
 ALIGN_TOL_DEG = 8.0
 ALIGN_SWITCH_STEPS = 40   # 3점 회차 전후진 1구간 길이 (steps)

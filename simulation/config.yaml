@@ -8,10 +8,10 @@ dxf:
   insunits_mm: 4          # $INSUNITS expected value (mm)
   scale_to_m: 0.001        # mm -> m
   flatten_tol_m: 0.02      # SPLINE/ARC flattening tolerance
-  plan_layers: ["Sketch4", "Sketch3"]   # 평면 경계 (suffix 매칭, 한글 prefix 무시)
+  plan_layers: ["밑 도면"]   # 평면 경계 (suffix 매칭, 한글 prefix 무시). v3 dxf: 단일 통합 도면.
   slope_layers:
-    upper: "윗 경로"
-    lower: "아랫 경로"
+    upper: "옆 절삭 2"   # run=50.76m/rise=1.00m -> 1.97% (완만, 위 회랑)
+    lower: "옆 절삭"     # run=55.71m/rise=4.59m -> 8.24% (가파름, 아래 회랑)
 
 bus:
   length_total: 11.780   # 전장 [m]  (DXF, bus_model.dxf 기준)
@@ -19,8 +19,16 @@ bus:
   wheelbase_L: 6.290      # 축거 [m]  (DXF, Bicycle 모델의 L)
   overhang_front: 2.772   # 전방 오버행 [m] (DXF)
   overhang_rear: 2.718    # 후방 오버행 [m] (DXF)
-  R_min: 10.5             # 최소회전반경 [m]  (vehicle_spec.csv 실측치)
-  # 파생: delta_max = arctan(wheelbase_L / R_min) = arctan(6.290 / 10.5)
+  R_min: 10.5             # 공표 최소회전반경 [m] — RL_WHEEL_GEOMETRY_REPLAN.md PHASE 0 기준 "추정값"
+  R_min_basis: outer_front_tire_track  # 측정기준 가정: 바깥 앞바퀴 자국 중심(자동차규칙 제9조 정의). 자기인증 제원표 확보 전까지 추정.
+  R_min_label: estimated  # 자기인증 제원표/등록증 미확보 상태. 확보 시 정식값으로 갱신하고 이 라벨 제거할 것.
+  T_f: 2.075              # 앞 윤거 [m] — 현대 유니버스 카탈로그 참고값 (트림 미확정, 추정)
+  T_f_label: estimated
+  # 파생: PHASE 1 재유도 공식(kinematics/bicycle.py의 corrected_rear_axle_radius/
+  # delta_max_from_Rmin_spec)이 R_min(바깥 앞바퀴 자국 기준)과 T_f로 뒷축 중심
+  # 회전반경 R을 먼저 구하고 delta_max = atan(L / R)을 계산한다. 기존
+  # atan(L / R_min) 직접 사용은 R_min을 뒷축 반경으로 오인한 것이었음
+  # (RL_WHEEL_GEOMETRY_REPLAN.md PHASE 1).
 
   # 기준점 (§2.6) — 코드에 상수로
   rear_axle_local_Y: 9.0623          # 버스 로컬 뒷축 Y [m]
@@ -37,24 +45,43 @@ kinematics:
 
 goal:
   ref: front_face_bottom_center   # 고정 (변경 금지)
-  # 상단(진출) 경사로 끝 지점 — 도로 끝과 버스 앞면 중앙이 닿는 자세 (사용자 확인).
-  # 경계선과 완전히 겹치면 shapely contains()가 경계접촉을 충돌로 보는 문제가
-  # 있어 1m 안쪽으로 여유를 둠 (도로 끝 중점은 (-50.7601, 5.0)).
-  x: -49.7601
-  y: 5.0
-  heading: 3.1416   # rad (pi), apex(turn zone) 반대 방향, 도로 끝을 향해 진행
+  # 2026-07-04 재정의 (사용자 지정): "버스 앞면 중앙이 위 경사로 끝 선분(폭
+  # 방향) 중앙에 닿는 순간"을 목표로 삼는다 — 기존에는 회랑 안쪽으로
+  # 임의로 물러난 지점을 썼으나(여유 확보 목적으로 tip에서 8m 이상 안쪽),
+  # 사용자가 실제 회차 시작/종료 기준을 경사로 끝단(캡) 자체로 명확히
+  # 지정함에 따라 재계산했다. tests/recompute_start_goal.py +
+  # tests/refine_ramp_pose.py 로 유도:
+  #   1) raw_plan.json에서 위 경사로 끝단 캡 세그먼트(2점 직선)를 식별
+  #      ((-27.863,4.681)-(-29.284,-1.603)) — 폭 6.442m.
+  #   2) 캡 중앙에서 폴리곤 안쪽으로의 수직 방향을 구해 "이상적" heading을
+  #      얻음(캡 밖으로 나가는 방향의 반대, ≈167.25deg).
+  #   3) 그 이상적 지점(캡 중앙, 그 heading)은 캡 바로 안쪽에서 회랑이
+  #      휘어 있어 그대로 쓰면 충돌(위반면적 0.27㎡) — 전진거리/헤딩/캡을
+  #      따른 옆이동을 그리드로 미세탐색해 위반이 0이 되는 가장 가까운
+  #      조합을 찾음: 전진 0.25m, heading 보정 +1deg, 옆이동 0.3m 만으로
+  #      충돌 해소(기존 대비 훨씬 캡에 가까움 — 기존 config는 tip에서
+  #      8m+ 안쪽에 있었음). 이후 위반==0인 지점은 벽에 딱 붙어 있어
+  #      Hybrid A*가 첫 스텝부터 대부분 충돌해 탐색공간이 37개로 고갈되는
+  #      문제가 있어, 0.15m 안전여유를 두고 재탐색(옆이동만 0.3->0.6m로
+  #      소폭 조정, d/heading은 동일).
+  x: -28.197
+  y: 2.069
+  heading: 2.9366   # rad (168.25deg)
   tol_pos: 0.5
   tol_heading: 0.1
   v_stop: 0.1
 
-# 시작 자세 (뒷축 기준, road 좌표). 하단(진입) 경사로 끝 지점 — 도로 끝과
-# 버스 뒷면이 닿는 자세, 진입 경사로 방향(apex 쪽)으로 헤딩 (사용자 확인:
-# 하단=진입, 상단=진출).
+# 시작 자세 (뒷축 기준, road 좌표).
+# 2026-07-04 재정의 (사용자 지정): "버스 뒷면이 아래 경사로 시작 선분(폭
+# 방향) 중앙에 닿는 순간의 앞면 중앙 위치"를 시작 기준으로 삼는다. 같은
+# 방식(tests/recompute_start_goal.py + refine_ramp_pose.py)으로 유도 —
+# 아래 경사로 시작단 캡((-24.173,-9.017)-(-22.771,-13.272), 폭 4.480m)의
+# 중앙·수직 heading은 전진 0.25m, heading 보정 -1deg 만으로 충돌 없이
+# 확정(기존 config 대비 캡에 2.3m 더 가까움).
 start:
-  # 1m + rear_oh(2.718m) 안쪽 여유 적용 (도로 끝 중점은 (-47.8683, -28.7952))
-  x: -44.5503
-  y: -27.1177
-  heading: 0.4681   # rad (약 26.82deg), 진입 경사로 진행방향(apex를 향함)
+  x: -20.639
+  y: -10.261
+  heading: 0.3008   # rad (17.24deg)
 
 sensors:
   # 도로 전체가 진입/진출 경사로(각 50~56m)까지 확장되면서 직선 구간에서
@@ -82,11 +109,21 @@ env:
   # 50.8m)로 늘어나, v_max=2.0m/s 기준 600 steps(60초, 최대 120m)로는 도달이
   # 물리적으로 불가능해 1800 steps(180초)로 확장 (도로 확장 작업 중 발견).
   max_episode_steps: 1800
+  # RL_WHEEL_GEOMETRY_REPLAN.md PHASE 2: 스텝 사이(dt=0.1s) 뒷축 자세를 이만큼
+  # 선형보간해 중간 자세에서도 OBB 충돌검사를 수행 (v_max=2m/s면 스텝당 최대
+  # 0.2m 이동 — 저속이라 선형보간으로 충분, 완전한 연속 스윕은 아님).
+  collision_substeps: 4
 
 slope:
   use_dynamics_term: false
   g: 9.81
   blend_half_width_m: 1.0   # 정점 전환 구간 블렌드 폭 [m] (두 갈래 중심선 거리차 기준)
+  # v3 dxf에는 Sketch3(갈래 판정용 짧은 기준선)가 없어짐 -> apex(0,0)에서 각
+  # 회랑 방향으로 뻗는 기준선을 새 경계 형상에서 직접 계산해 고정값으로 둠
+  # (grade_field.py가 Sketch3 대신 이 값을 읽음).
+  grade_refs:
+    upper: [[0.0, 0.0], [-9.985, -0.5465]]   # apex -> 위 회랑(완만) 방향, 10m
+    lower: [[0.0, 0.0], [-9.032, -4.288]]    # apex -> 아래 회랑(가파름) 방향, 10m
 
 verification:
   upper_grade_pct: 1.97
@@ -100,6 +137,10 @@ reward:
   goal_bonus: 100.0         # 목표 도달 보너스
   clearance_threshold: 1.0  # 경계 여유 임계 [m]
   w_clear: 5.0              # 경계 여유 페널티 가중치
+  # RL_WHEEL_GEOMETRY_REPLAN.md PHASE 3: 2D 근사 clearance와 Vehicle Tracking
+  # swept 검증 clearance의 격차 Δ를 반영할 자리. PHASE 5(외부 CAD 검증)에서
+  # 실측 후 채울 예정 — 아직 측정 전이라 0.0(기존 동작 불변).
+  boundary_margin_m: 0.0
   w_steer_smooth: 0.1       # 급조향 페널티 가중치 (|Δδ|)
   w_reversal: 2.0           # 방향전환 기본 페널티
   reversal_slope_k: 5.0     # 방향전환 페널티의 경사 비례 계수 k

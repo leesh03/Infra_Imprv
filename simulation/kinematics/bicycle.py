@@ -14,7 +14,28 @@ SIM_DIR = Path(__file__).resolve().parent.parent
 
 
 def delta_max_from_Rmin(L, R_min):
+    """구 공식(RL_WHEEL_GEOMETRY_REPLAN.md PHASE 1 기준 오류) — R_min을 뒷축
+    중심 회전반경으로 직접 취급한다. 코드에서는 더 이상 쓰지 않고, 민감도
+    비교(delta_max_sensitivity.py)의 "이전 값" 기준선으로만 남겨둔다."""
     return math.atan(L / R_min)
+
+
+def corrected_rear_axle_radius(R_spec, L, T_f=None, W=None, f_oh=None,
+                                basis="outer_front_tire_track"):
+    """공표 R_min(R_spec)의 측정 기준에 맞춰 뒷축 중심 회전반경 R을 역산한다
+    (RL_WHEEL_GEOMETRY_REPLAN.md PHASE 1). R_spec은 항상 R보다 크다."""
+    if basis == "outer_front_tire_track":
+        return math.sqrt(R_spec ** 2 - L ** 2) - T_f / 2
+    if basis == "outer_body":
+        return math.sqrt(R_spec ** 2 - (L + f_oh) ** 2) - W / 2
+    raise ValueError(f"unknown R_min basis: {basis}")
+
+
+def delta_max_from_Rmin_spec(L, R_spec, **kwargs):
+    """올바른 변환: 뒷축 반경 R을 먼저 구하고 그로부터 delta_max를 유도한다.
+    반환값 (delta_max, R)."""
+    R = corrected_rear_axle_radius(R_spec, L, **kwargs)
+    return math.atan(L / R), R
 
 
 def front_center(x, y, theta, d_ref):
@@ -60,8 +81,16 @@ class BicycleModel:
             with open(SIM_DIR / "config.yaml", "r", encoding="utf-8") as f:
                 config = yaml.safe_load(f)
         self.L = config["bus"]["wheelbase_L"]
-        self.R_min = config["bus"]["R_min"]
-        self.delta_max = delta_max_from_Rmin(self.L, self.R_min)
+        self.R_min = config["bus"]["R_min"]  # 공표 스펙값(R_spec), 뒷축 반경이 아님
+        self.R_min_basis = config["bus"].get("R_min_basis", "outer_front_tire_track")
+        self.T_f = config["bus"].get("T_f")
+        self.width = config["bus"]["width"]
+        self.overhang_front = config["bus"]["overhang_front"]
+        self.delta_max, self.R = delta_max_from_Rmin_spec(
+            self.L, self.R_min,
+            T_f=self.T_f, W=self.width, f_oh=self.overhang_front,
+            basis=self.R_min_basis,
+        )
         self.d_ref = config["bus"]["d_ref"]
         self.dt = config["kinematics"]["dt"]
         self.v_min = config["kinematics"]["v_min"]
