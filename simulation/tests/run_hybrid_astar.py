@@ -94,15 +94,24 @@ def main():
     total_len = sum(math.hypot(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]) for i in range(1, len(path)))
     print("gear changes:", gear_changes, "total path length:", round(total_len, 1))
 
-    # front-center 웨이포인트로 변환해 저장
+    # front-center 웨이포인트로 변환해 저장 (보상 shaping/progress 계산용).
+    # 2026-07-06: 커리큘럼 시작자세 샘플링(_sample_start_pose)이 front-center
+    # 경로의 접선 방향을 뒷축 heading으로 역산해 쓰다가 심각한 버그로 이어짐
+    # — 전방오버행(d_ref=9.06m)이 R_min(7.37m)보다 커서, 급회전 중에는
+    # front-center 경로의 진행 방향이 실제 뒷축 heading과 크게 어긋난다
+    # (직진 구간 아니면 근사가 거의 항상 깨짐 — 임의 200곳 샘플 중 64.5%가
+    # 충돌). 그래서 뒷축 (x,y,theta)를 별도 배열로 그대로 저장해, 커리큘럼
+    # 샘플링은 역산 없이 이 원본을 직접 보간해서 쓰도록 한다.
     waypoints = []
     gears = []
+    rear_waypoints = []
     for (x, y, theta, gear) in path:
         fc = env.front_center(BicycleState(x=x, y=y, theta=theta, v=0.0, delta=0.0))
         waypoints.append([round(fc[0], 3), round(fc[1], 3)])
         gears.append(gear if gear != "START" else "FWD")
+        rear_waypoints.append([round(x, 3), round(y, 3), round(theta, 6)])
 
-    out = {"waypoints": waypoints, "gears": gears}
+    out = {"waypoints": waypoints, "gears": gears, "rear_waypoints": rear_waypoints}
     with open(SIM_DIR / "geometry" / "reference_path.json", "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
     print("saved geometry/reference_path.json")

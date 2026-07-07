@@ -112,6 +112,16 @@ def main():
                          help="탐색 유지용 엔트로피 계수. 커리큘럼으로 매 에피소드 난이도가 섞여 나오므로"
                               " (멀리/가까이 모두 등장) 정책이 한쪽으로 과확신해 행동이 무너지는 것을 막는 용도.")
     parser.add_argument("--no-curriculum", action="store_true", help="커리큘럼/시작자세 노이즈 끄고 항상 실제 START에서 시작")
+    parser.add_argument("--fixed-curriculum-level", type=float, default=None,
+                         help="2026-07-07 진단용: CurriculumCallback의 램프업 없이 난이도 하한을 이 값(0=GOAL"
+                              " 근처, 1=실제 START)으로 고정하고 시작자세 노이즈도 끈다. --fixed-curriculum-ceiling"
+                              " 없이 이것만 주면 상한도 같은 값으로 고정돼(무작위 폭 0) 항상 정확히 이 난이도로만"
+                              " 나온다. 5M-step 학습이 성공률 0%로 나온 원인이 커리큘럼 램프 속도/난이도 자체인지,"
+                              " 아니면 가장 쉬운 조건에서도 애초에 성공을 못 배우는지 구분하기 위함.")
+    parser.add_argument("--fixed-curriculum-ceiling", type=float, default=None,
+                         help="--fixed-curriculum-level과 같이 써서 난이도 샘플링 상한을 지정(기본은 하한과"
+                              " 동일 = 무작위 폭 0). 예: --fixed-curriculum-level 0.0 --fixed-curriculum-ceiling 0.15"
+                              " -> 항상 GOAL 근처~약간 어려운 정도까지만 나오게 강제.")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--outputs-dir", default="outputs",
                          help="모델/곡선 저장 위치 (SIM_DIR 기준 상대경로 또는 절대경로)."
@@ -120,6 +130,11 @@ def main():
 
     venv = SubprocVecEnv([make_env_fn() for _ in range(args.n_envs)])
     venv = VecNormalize(venv, norm_obs=True, norm_reward=True, clip_obs=10.0)
+    if args.fixed_curriculum_level is not None:
+        ceiling = args.fixed_curriculum_ceiling if args.fixed_curriculum_ceiling is not None else args.fixed_curriculum_level
+        venv.env_method("set_curriculum_level", args.fixed_curriculum_level)
+        venv.env_method("set_curriculum_ceiling", ceiling)
+        venv.env_method("set_start_noise", 0.0, 0.0)
 
     outputs_dir = Path(args.outputs_dir)
     if not outputs_dir.is_absolute():
@@ -143,7 +158,7 @@ def main():
 
     callback = EpisodeStatsCallback()
     callbacks = [callback]
-    if not args.no_curriculum:
+    if not args.no_curriculum and args.fixed_curriculum_level is None:
         callbacks.append(CurriculumCallback(args.total_timesteps, verbose=1))
     model.learn(total_timesteps=args.total_timesteps, callback=callbacks, progress_bar=True)
 

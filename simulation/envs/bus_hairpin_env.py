@@ -86,6 +86,7 @@ class BusHairpinEnv(gym.Env):
         # config의 start와 동일한 실제 시작점(노이즈 0일 때) — 기존 동작과 호환.
         curriculum_cfg = config.get("curriculum", {})
         self.curriculum_level = curriculum_cfg.get("level_default", 1.0)
+        self.curriculum_ceiling = 1.0
         self.start_noise_pos = curriculum_cfg.get("noise_pos_std", 0.0)
         self.start_noise_heading = curriculum_cfg.get("noise_heading_std", 0.0)
 
@@ -102,8 +103,16 @@ class BusHairpinEnv(gym.Env):
     def set_curriculum_level(self, level):
         """난이도 하한(floor). 0.0=GOAL 근처도 허용(가장 쉬움) ~
         1.0=항상 실제 START(가장 어려움). 실제 에피소드 난이도는 매 reset()마다
-        [level, 1.0] 구간에서 무작위로 뽑힌다(_sample_start_pose)."""
+        [level, curriculum_ceiling] 구간에서 무작위로 뽑힌다(_sample_start_pose)."""
         self.curriculum_level = float(np.clip(level, 0.0, 1.0))
+
+    def set_curriculum_ceiling(self, ceiling):
+        """2026-07-07 진단용: episode_level 샘플링 상한을 기본값 1.0보다 낮춰
+        '항상 쉬운 쪽만' 나오도록 강제한다 — floor(curriculum_level)만 낮추면
+        여전히 [floor, 1.0] 사이에서 뽑혀 가끔 진짜 START(가장 어려움)가 섞여
+        나오므로, 커리큘럼이 원인인지(난이도 뒤섞임) 정책이 쉬운 조건에서도
+        아예 성공을 못 배우는지 구분하려면 상한도 같이 낮춰야 한다."""
+        self.curriculum_ceiling = float(np.clip(ceiling, 0.0, 1.0))
 
     def set_start_noise(self, pos_std, heading_std):
         self.start_noise_pos = max(0.0, float(pos_std))
@@ -227,11 +236,18 @@ class BusHairpinEnv(gym.Env):
         action으로 응답 — 1차 학습에서 성공률이 100%->0%로 붕괴한 뒤 회복하지
         못한 원인으로 추정). 매 에피소드 난이도를 섞어 뽑으면 학습 후반에도
         쉬운/어려운 자세가 계속 같이 나와 이 분포 이동 문제를 줄인다."""
-        episode_level = self._rng.uniform(self.curriculum_level, 1.0) if self.curriculum_level < 1.0 else 1.0
-        s_total = self.reference_path.total_length
+        episode_level = (self._rng.uniform(self.curriculum_level, self.curriculum_ceiling)
+                         if self.curriculum_level < self.curriculum_ceiling else self.curriculum_ceiling)
+        # 2026-07-06: 이전에는 front-center 경로의 접선 방향을 뒷축 heading으로
+        # 역산해 썼는데, 전방오버행(d_ref=9.06m)이 R_min(7.37m)보다 커서
+        # 급회전 중에는 front-center 경로가 나아가는 방향이 실제 뒷축
+        # heading과 크게 어긋난다(직진이 아니면 근사가 거의 항상 깨짐 —
+        # 임의 200곳 샘플 중 64.5%가 충돌, 5M-step 학습 성공률 0%의 원인으로
+        # 확인됨). reference_path.json에 저장된 뒷축 원본(rear_waypoints)을
+        # 역산 없이 직접 보간해서 쓴다.
+        s_total = self.reference_path.rear_axle_total_length
         s_target = s_total * (1.0 - episode_level)
-        px, py = self.reference_path.point_at(s_target)
-        heading = self.reference_path.tangent_heading_at(px, py)
+        px, py, heading = self.reference_path.rear_axle_pose_at(s_target)
 
         if self.start_noise_pos <= 0 and self.start_noise_heading <= 0:
             return px, py, heading
@@ -253,6 +269,9 @@ class BusHairpinEnv(gym.Env):
         self.state = BicycleState(x=x, y=y, theta=heading, v=0.0, delta=0.0)
         self._step_count = 0
         self._trajectory = [(self.state.x, self.state.y)]
+        # 0=아직 유의미하게 움직인 적 없음, 이후 +1=마지막으로 FWD로 움직였음,
+        # -1=마지막으로 REV로 움직였음 (reversal_term 판정용, _reward 참고)
+        self._last_gear_sign = 0
         obs = self._observation(self.state)
         info = {}
         return obs, info
@@ -314,10 +333,20 @@ class BusHairpinEnv(gym.Env):
         steer_term = -r["w_steer_smooth"] * abs(state.delta - prev_state.delta)
 
         grade_here = self.grade_field.grade_at(state.x, state.y)
-        reversed_dir = (prev_state.v > 0 and state.v < 0) or (prev_state.v < 0 and state.v > 0)
+        # 2026-07-06: 이전에는 prev_state.v/state.v의 부호를 한 스텝만 비교했는데,
+        # dt=0.1s·a_max=1.0 하에서는 스텝당 속도 변화가 최대 0.1m/s뿐이라
+        # 방향전환은 항상 중간에 v=0.0을 거쳐간다 — "감속->정지->반대가속"이라는
+        # 지극히 정상적인 전환 패턴에서 단 한 번도 안 걸렸다(시뮬레이션으로 확인,
+        # 예: 0.5->0.4->...->0.0->-0.1->...->-0.5 전체 구간에서 reversed_dir 전부
+        # False). 그래서 "마지막으로 유의미하게 움직인 방향"을 기억해뒀다가, 그와
+        # 반대 방향으로 다시 움직이기 시작하는 순간(중간에 몇 스텝을 멈춰
+        # 있었든 상관없이) 정확히 한 번만 페널티를 매기도록 바꾼다.
         reversal_term = 0.0
-        if reversed_dir:
-            reversal_term = -r["w_reversal"] * (1.0 + r["reversal_slope_k"] * grade_here)
+        if abs(state.v) > r["stop_speed_thresh"]:
+            cur_gear_sign = 1 if state.v > 0 else -1
+            if self._last_gear_sign != 0 and cur_gear_sign != self._last_gear_sign:
+                reversal_term = -r["w_reversal"] * (1.0 + r["reversal_slope_k"] * grade_here)
+            self._last_gear_sign = cur_gear_sign
 
         stop_term = 0.0
         if abs(state.v) < r["stop_speed_thresh"] and not success:
